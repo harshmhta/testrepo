@@ -12,7 +12,7 @@ Vagrant.configure("2") do |config|
   # Customize the number of cores and amount of memory on the VM:
   config.vm.provider "virtualbox" do |vb|
     vb.cpus = "2"
-    vb.memory = "512"
+    vb.memory = "2048"
   end
 
   # Setup default packages and configuration files

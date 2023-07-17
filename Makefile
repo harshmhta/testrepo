@@ -1,46 +1,71 @@
-TARGET = mdriver
-OBJS += memlib.o
-OBJS += fcyc.o
-OBJS += clock.o
-OBJS += stree.o
-OBJS += mdriver.o
-OBJS += mm.o
-LIBS += -lm -lrt
+TARGET = channel
+TARGET_SANITIZE = channel_sanitize
+STUDENT_OBJS += channel.o
+STUDENT_OBJS += linked_list.o
+OBJS += $(STUDENT_OBJS)
+OBJS += buffer.o
+OBJS += stress.o
+OBJS += stress_send_recv.o
+OBJS += test.o
+LIBS += -lpthread
+LIBS += -lrt
 
-CC = gcc
+W204_CC = /home/software/gcc/gcc-6.3.0/bin/gcc630
+ifeq ("$(wildcard $(W204_CC))","")
+	CC = gcc
+else
+	CC = $(W204_CC)
+endif
 CFLAGS += -MMD -MP # dependency tracking flags
 CFLAGS += -I./
-CFLAGS += -std=gnu99 -g -Wall -Wextra -Werror -Wno-unused-function -Wno-unused-parameter
-CFLAGS += -DDRIVER
+CFLAGS += -std=gnu11 -g -Wall -Werror -Wconversion
 LDFLAGS += $(LIBS)
 
-all: CFLAGS += -O3 # release flags
-all: $(TARGET)
+NOT_ALLOWED += -Dsleep=sleep_not_allowed
+NOT_ALLOWED += -Dusleep=usleep_not_allowed
+NOT_ALLOWED += -Dnanosleep=nanosleep_not_allowed
+NOT_ALLOWED += -Dclock_nanosleep=clock_nanosleep_not_allowed
+NOT_ALLOWED += -Dselect=select_not_allowed
+NOT_ALLOWED += -Dsem_timedwait=sem_timedwait_not_allowed
+NOT_ALLOWED += -Dpthread_cond_timedwait=pthread_cond_timedwait_not_allowed
+NOT_ALLOWED += -Dpthread_mutex_timedlock=pthread_mutex_timedlock_not_allowed
+NOT_ALLOWED += -Dpthread_rwlock_timedrdlock=pthread_rwlock_timedrdlock_not_allowed
+NOT_ALLOWED += -Dpthread_rwlock_timedwrlock=pthread_rwlock_timedwrlock_not_allowed
+
+all: CFLAGS += -O2 # release flags
+all: $(TARGET) $(TARGET_SANITIZE)
 
 release: clean all
 
 debug: CFLAGS += -O0 # debug flags
-debug: clean $(TARGET)
+debug: clean $(TARGET) $(TARGET_SANITIZE)
+
+SANITIZE_OBJS = $(OBJS:%.o=%_sanitize.o)
+$(TARGET_SANITIZE): $(SANITIZE_OBJS)
+	$(CC) $(CFLAGS) -fsanitize=thread -o $@ $^ $(LDFLAGS) -static-libtsan
 
 $(TARGET): $(OBJS)
-	@chmod +x *.pl *.sh
-	@sed -i -e 's/\r$$//g' *.pl *.sh # dos to unix
-	@sed -i -e 's/\r/\n/g' *.pl *.sh # mac to unix
-	-@./macro-check.pl -f mm.c
-	-@./global_check.sh
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+$(STUDENT_OBJS:%.o=%_sanitize.o): CFLAGS += $(NOT_ALLOWED)
+%_sanitize.o: %.c
+	$(CC) $(CFLAGS) -fPIC -fsanitize=thread -c -o $@ $<
+
+$(STUDENT_OBJS): CFLAGS += $(NOT_ALLOWED)
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-DEPS = $(OBJS:%.o=%.d)
+ALL_OBJS = $(OBJS) + $(SANITIZE_OBJS)
+DEPS = $(ALL_OBJS:%.o=%.d)
 -include $(DEPS)
 
 clean:
-	-@rm $(TARGET) $(OBJS) $(DEPS) tput_* 2> /dev/null || true
+	-@rm $(TARGET) $(TARGET_SANITIZE) $(ALL_OBJS) $(DEPS) 2> /dev/null || true
 
 test:
-	@chmod +x *.pl *.sh
-	@sed -i -e 's/\r$$//g' *.pl *.sh # dos to unix
-	@sed -i -e 's/\r/\n/g' *.pl *.sh # mac to unix
-	-@./driver.pl
+	@chmod +x grade.py
+	@sed -i -e 's/\r$$//g' *.py # dos to unix
+	@sed -i -e 's/\r/\n/g' *.py # mac to unix
+	@sed -i -e 's/\r$$//g' *.txt # dos to unix
+	@sed -i -e 's/\r/\n/g' *.txt # mac to unix
+	./grade.py

@@ -1,97 +1,76 @@
-# malloclab: writing a dynamic storage allocator
+# concurrencylab: Channels in C
 
 ## Introduction
 
-**IMPORTANT: You will be required to show a demo as part of this assignment. The demo will show 3 parts:**
-**1. Design comments at the top of mm.c**
-**2. Code comments throughout mm.c**
-**3. Demonstrate your heap consistency checker code running**
-**See the rubric towards the end of the README for details on signing up for the demo and expectations.**
+A channel is a model for synchronization via message passing. You can think of a channel as a queue/buffer of messages with a fixed maximum size. Messages may be sent over a channel by a thread (*Sender*) by adding to the queue/buffer and other threads which have a reference to this channel can receive the messages (*Receivers*) by removing from the queue/buffer. A channel can have multiple senders and receivers referencing it at any point of time.
 
-**IMPORTANT: Read through the ENTIRE document. The heap consistency checker description is meant to help you understand how consistency checking is a critical debugging tool to help you find bugs in your code. The rubric is long, but is meant to help you understand how to write good documentation. There are many hints at the end for how to work on the assignment. The README is long because it is meant to give you a lot of help and guidance with the project, so please take the time to read ALL of it carefully.**
+Channels are used as a primitive to implement various other concurrent programming constructs. For example, channels are heavily used in Google's *Go* programming language and are very useful frameworks for high-level concurrent programming. In this lab you will be writing your own version of a channel, which will be used to communicate among multiple clients. A client can either write onto the channel or read from it. Keep in mind that multiple clients can read and write simultaneously from the channel. You are encouraged to explore the design space creatively and implement a channel that is correct and not exceptionally slow or inefficient. Performance is not the main concern in this assignment (functionality is the main concern), but your implementation should avoid inefficient designs that sleep for any fixed time or unnecessarily waste CPU time.
 
-In this lab, you will be writing a dynamic storage allocator for C programs, i.e., your own version of the `malloc`, `free`, and `realloc` functions. You are encouraged to explore the design space creatively and implement an allocator that is correct, space efficient, and fast.
+There are multiple variations to channels, such as whether the send/receive is blocking or non-blocking. In blocking mode, receivers always block until there is data to receive, whereas in non-blocking mode, they simply return. Similarly, with senders, in blocking mode, if the queue/buffer is full, senders wait until some receiver has retrieved a value and there is available space in the queue/buffer whereas in non-blocking mode, they simply leave without sending. In this lab, you will support both blocking and non-blocking send/receive functions.
 
-The only file you will be modifying is `mm.c`. *Modifications in other files will not be used in the grading.* You will be implementing the following functions:
-- `bool mm_init(void)`
-- `void* malloc(size_t size)`
-- `void free(void* ptr)`
-- `void* realloc(void* oldptr, size_t size)`
-- `bool mm_checkheap(int line_number)`
+The only files you will be modifying are *channel.c* and *channel.h* and optionally *linked_list.c* and *linked_list.h*. **You should NOT make any changes in any file besides these four files.** You will be implementing the following functions, which are described in channel.c and channel.h:
+- `channel_t* channel_create(size_t size)`
+- `enum channel_status channel_send(channel_t* channel, void* data)`
+- `enum channel_status channel_receive(channel_t* channel, void** data)`
+- `enum channel_status channel_non_blocking_send(channel_t* channel, void* data)`
+- `enum channel_status channel_non_blocking_receive(channel_t* channel, void** data)`
+- `enum channel_status channel_close(channel_t* channel)`
+- `enum channel_status channel_destroy(channel_t* channel)`
+- `enum channel_status channel_select(select_t* channel_list, size_t channel_count, size_t* selected_index)`
 
-You are encouraged to define other (static) helper functions, structures, etc. to better structure your code.
+The enum channel_status is a named enumeration type that is defined in channel.h. Rather than using an int, which can be any number, enumerations are integers that should match one of the defined values. For example, if you want to return that the function succeeded, you would just return SUCCESS.
 
-## Description of the dynamic memory allocator functions
-
-- `mm_init`: Before calling `malloc`, `realloc`, `calloc`, or `free`, the application program (i.e., the trace-driven driver program that will evaluate your code) calls your `mm_init` function to perform any necessary initializations, such as allocating the initial heap area. You should NOT call this function. Our code will call this function before the other functions so that this gives you an opportunity to initialize your implementation. The return value should be true on success and false if there were any problems in performing the initialization.
-
-- `malloc`: The `malloc` function returns a pointer to an allocated block payload of at least `size` bytes. The entire allocated block should lie within the heap region and should not overlap with any other allocated chunk. If you are out of space and `mm_sbrk` is unable to extend the heap, then you should return NULL. Similar to how the standard C library (libc) always returns payload pointers that are aligned to 16 bytes, your malloc implementation should do likewise and always return 16-byte aligned pointers.
-
-- `free`: The `free` function frees the block pointed to by `ptr`. It returns nothing. This function is only guaranteed to work when the passed pointer (`ptr`) was returned by an earlier call to `malloc`, `calloc`, or `realloc` and has not yet been freed. If `ptr` is NULL, then `free` should do nothing.
-
-- `realloc`: The `realloc` function returns a pointer to an allocated region of at least `size` bytes with the following constraints.
-
-    - if `ptr` is NULL, the call is equivalent to `malloc(size)`
-
-    - if `size` is equal to zero, the call is equivalent to `free(ptr)`
-
-    - if `ptr` is not NULL, it must have been returned by an earlier call to `malloc`, `calloc`, or `realloc`. The call to `realloc` changes the size of the memory block pointed to by `ptr` (the *old block*) to `size` bytes and returns the address of the new block. Notice that the address of the new block might be the same as the old block, or it might be different, depending on your implementation, the amount of internal fragmentation in the old block, and the size of the `realloc` request.
-    The contents of the new block are the same as those of the old `ptr` block, up to the minimum of the old and new sizes. Everything else is uninitialized. For example, if the old block is 8 bytes and the new block is 12 bytes, then the first 8 bytes of the new block are identical to the first 8 bytes of the old block and the last 4 bytes are uninitialized. Similarly, if the old block is 8 bytes and the new block is 4 bytes, then the contents of the new block are identical to the first 4 bytes of the old block.
-
-These semantics match the the semantics of the corresponding libc `malloc`, `realloc`, and `free` functions. Run `man malloc` to view complete documentation.
-
-## Heap consistency checker
-
-**IMPORTANT: The heap consistency checker will be graded to motivate you to write a good checker, but the main purpose is to help you debug.**
-
-Dynamic memory allocators are notoriously tricky beasts to program correctly and efficiently. They are difficult to program correctly because they involve a lot of untyped pointer manipulation and low-level manipulation of bits and bytes. You will find it very helpful to write a heap checker `mm_checkheap` that scans the heap and checks it for consistency. The heap checker will check for *invariants* which should always be true.
-
-Some examples of what a heap checker might check are:
-- Is every block in the free list marked as free?
-- Are there any contiguous free blocks that somehow escaped coalescing?
-- Is every free block actually in the free list?
-- Do the pointers in the free list point to valid free blocks?
-- Do any allocated blocks overlap?
-- Do the pointers in a heap block point to valid heap addresses?
-
-You should implement checks for any invariants you consider prudent. It returns true if your heap is in a valid, consistent state and false otherwise. You are not limited to the listed suggestions nor are you required to check all of them. You are encouraged to print out error messages when the check fails. You can use `dbg_printf` to print messages in your code in debug mode. To enable debug mode, uncomment the line `#define DEBUG`.
-
-To call the heap checker, you can use `mm_checkheap(__LINE__)`, which will pass in the line number of the caller. This can be used to identify which line detected a problem.
+You are encouraged to define other (static) helper functions, structures, etc. to help structure the code.
 
 ## Support routines
 
-The `memlib.c` package simulates the memory system for your dynamic memory allocator. You can invoke the following functions in `memlib.c`:
+The buffer.c and buffer.h files contain the helper constructs for you to create and manage a buffered channel. These functions will help you separate the buffer management from the concurrency issues in your channel code. Please note that these functions are **NOT** thread-safe. You are welcome to use any of these functions, but you should not change them.
+- `buffer_t* buffer_create(size_t capacity)`
 
-- `void* mm_sbrk(int incr)`: Expands the heap by `incr` bytes, where `incr` is a positive non-zero integer. It returns a generic pointer to the first byte of the newly allocated heap area. The semantics are identical to the Unix `sbrk` function, except that `mm_sbrk` accepts only a non-negative integer argument. You must use our version, `mm_sbrk`, for the tests to work. Do NOT use `sbrk`.
+    Creates a buffer with the given capacity.
 
-- `void* mm_heap_lo(void)`: Returns a generic pointer to the first byte in the heap.
+- `enum buffer_status buffer_add(buffer_t* buffer, void* data)`
 
-- `void* mm_heap_hi(void)`: Returns a generic pointer to the last byte in the heap.
+    Adds the value into the buffer. Returns BUFFER_SUCCESS if the buffer is not full and value was added. Returns BUFFER_ERROR otherwise.
 
-- `size_t mm_heapsize(void)`: Returns the current size of the heap in bytes.
+- `enum buffer_status buffer_remove(buffer_t* buffer, void** data)`
 
-- `size_t mm_pagesize(void)`: Returns the system's page size in bytes (4K on Linux systems).
+    Removes the value from the buffer in FIFO order and stores it in data. Returns BUFFER_SUCCESS if the buffer is not empty and a value was removed. Returns BUFFER_ERROR otherwise.
 
-- `void* memset(void* ptr, int value, size_t n)`: Sets the first n bytes of memory pointed to by ptr to value.
+- `void buffer_free(buffer_t* buffer)`
 
-- `void* memcpy(void* dst, const void* src, size_t n)`: Copies n bytes from src to dst.
+    Frees the memory allocated to the buffer.
 
-Not all of these functions will be needed (only mm_sbrk is truly necessary), but they are provided in case you would like to use them.
+- `size_t buffer_capacity(buffer_t* buffer)`
 
-## Programming Rules
+    Returns the total capacity of the buffer.
 
-- You are not allowed to change any of the interfaces in `mm.c`.
+- `size_t buffer_current_size(buffer_t* buffer)`
 
-- You are not allowed to invoke any memory-management related library calls or system calls. For example, you are not allowed to use `sbrk`, `brk`, or the standard library versions of `malloc`, `calloc`, `free`, or `realloc`. Instead of `sbrk`, you should use our provided `mm_sbrk`.
+    Returns the current number of elements in the buffer.
 
-- Your code is expected to work in 64-bit environments, and you should assume that allocation sizes and offsets will require 8 byte (64-bit) representations.
+We have also provided the **optional** interface for a linked list in linked_list.c and linked_list.h. You are welcome to implement and use this interface in your code, but you are not required to implement it if you don't want to use it. It is primarily provided to help you structure your code in a clean fashion if you want to use linked lists in your code. *Linked lists may NOT be needed depending on your design, so do not try to force it into your solution.* You can add/change/remove any of the functions in linked_list.c and linked_list.h as you see fit.
 
-- You are not allowed to use macros as they can be error-prone. The better style is to use static functions and let the compiler inline the simple static functions for you.
+## Programming rules
+You are not allowed to take any of the following approaches to complete the assignment:
+- Spinning in a polling loop without any waiting calls; anytime you're looping for an unbounded amount of time, there should be some waiting call in that loop; for example, if you're waiting for a condition to be true, you cannot write code like `while (!condition) { /* do nothing */ }` as there should be some waiting call (e.g., pthread_cond_wait) within such loops 
+- Sleeping for any fixed amount of time; instead, use pthread_cond_wait or sem_wait
+- Trying to change the timing of your code to hide bugs such as race conditions
+- Using global variables in your code
 
-- You are limited to 128 bytes of global space for arrays, structs, etc. If you need large amounts of space for storing extra tracking data, you can put it in the heap area.
+**Allowed Libraries:** You are only allowed to use the pthread library, the POSIX semaphore library, basic standard C library functions (e.g., malloc/free), and the provided code in the assignment for completing your implementation. If you think you need some library function, please contact the instructor to determine eligibility. You can find a tutorial/reference for the pthread library at:
+
+https://hpc-tutorials.llnl.gov/posix/
+
+You can find a tutorial/reference for the POSIX semaphore library at:
+
+http://www.csc.villanova.edu/~mdamian/threads/posixsem.html
+
+https://pubs.opengroup.org/onlinepubs/7908799/xsh/semaphore.h.html
+
+Looking at documentation (e.g., for these libraries, for tools, etc.) is fine, but as stated in the academic integrity policy, **looking online for any hints about implementing channels is disallowed. All work must be your own without any collaboration of any form.** If you are unsure whether something is allowed, ask the instructor for clarification.
 
 ## Evaluation and testing your code
-
 You will receive zero points if:
 - You violate the academic integrity policy (sanctions can be greater than just a 0 for the assignment)
 - You don't show your partial work by periodically adding, committing, and pushing your code to GitHub
@@ -99,219 +78,61 @@ You will receive zero points if:
 - Your code does not compile/build
 - Your code crashes the grading script
 
-Otherwise, your grade will be calculated as follows:
-- [100 pts] Checkpoint 1: This part of the assignment simply tests the correctness of your code. Space utilization and throughput will not be tested in this checkpoint. Your grade will be based on the number of trace files that succeed.
+Your code will be evaluated for correctness, properly handling synchronization, and ensuring it does not violate any of the programming rules (e.g., do not spin or sleep for any period of time). We have provided many tests, but we reserve the right to add additional tests during the final grading, so you are responsible for ensuring your code is correct, where a large part of correctness is ensuring you don't have race conditions, deadlocks, or other synchronization bugs. To run the supplied test cases, simply run the following command in the project folder:
 
-- [100 pts] Checkpoint 2: This part of the assignment requires that your code is entirely functional and tests the space utilization (60%) and throughput (40%) of your code. Each metric will have a min and max target (i.e., goal) where if your utilization/throughput is above the max, you get full score and if it is below the min, you get no points. Partial points are assigned proportionally between the min and max. Additionally, there is a required minimum utilization and throughput where you will get a 0 for the entire checkpoint if either metric is below the required minimum requirement. The performance goals in checkpoint 2 are significantly reduced compared to the final submission.
+`make test`
 
-    - Space utilization (60%): The space utilization is calculated based on the peak ratio between the aggregate amount of memory used by the testing tool (i.e., allocated via `malloc` or `realloc` but not yet freed via `free`) and the size of the heap used by your allocator. You should design good policies to minimize fragmentation in order to increase this ratio.
+make test will compile your code in release mode and run the grade.py script, which runs a combination of the following tests many times to autograde your assignment (testing is slow; it will take minutes):
+- After running the make command in your project, two executable files will be created. The default executable, channel, is used to run test cases in the normal mode. The test cases are located in test.c, and you can find the list of tests at the bottom of the file. If you want to run a single test, run the following:
 
-    - Throughput (40%): The throughput is a performance metric that measures the average number of operations completed per second. **As the performance of your code can vary between executions and between machines, your score as you're testing your code is not guaranteed and is meant to give you a general sense of your performance.**
+    `./channel test_case_name iters`
 
-    There will be a balance between space efficiency and speed (throughput), so you should not go to extremes to optimize either the space utilization or the throughput only. To receive a good score, you must achieve a balance between utilization and throughput.
+    where test_case_name is the test name and iters is the number of times to run the test. If you do not provide a test name, all tests will be run. The default number of iterations is 1.
 
-- [150 pts + 30 pts extra credit] Final submission: This part of the assignment is graded similarly to Checkpoint 2, except that the grading curve has not been significantly reduced as is the case with Checkpoint 2. With the recommended design and optimizations, you should be able to get approximately 150 pts, and if your design performs better, it is possible to get up to 30 extra credit points. This is meant as a challenge for students who want to enhance their designs and experiment with inventing their own data structures and malloc designs.
+- The other executable, channel_sanitize, will be used to help detect data races in your code. It can be used with any of the test cases by replacing ./channel with ./channel_sanitize.
 
-- [50 pts] Heap checker demo and code comments: As part of the final submission, we will be reviewing your heap checker code as well as comments throughout your code. The week following the final due date, you will need to stop by TA office hours at your scheduled time to give a short 9 minute demo to explain your heap checker code, demonstrate that it works, and summarize your design and code. Your heap checker will be graded based on correctness, completeness, and comments. All comments (design, code, heap checker) should be understandable to a TA. The demo will show correctness. Your explanation of the heap checker and your malloc design will determine the degree to which your checker is checking invariants. See the next section for details on logistics for signing up for the demo and the grading rubric.
+    `./channel_sanitize test_case_name iters`
 
-To test your code, first compile/build your code by running: `make`. You need to do this every time you change your code for the tests to utilize your latest changes.
+    Any detected data races will be output to the terminal. You should implement code that does not generate any errors or warnings from the data race detector.
 
-To run all the tests *after* building your code, run: `make test`.
+- Valgrind is being used to check for memory leaks, report uses of uninitialized values, and detect memory errors such as freeing a memory space more than once. To run a valgrind check by yourself, use the command:
 
-To test a single trace file *after* building your code, run: `./mdriver -f traces/tracefile.rep`.
+    `valgrind -v --leak-check=full ./channel test_case_name iters`
 
-Each trace file contains a sequence of allocate, reallocate, and free commands that instruct the driver to call your `malloc`, `realloc`, and `free` functions in some sequence.
+    Note that channel_sanitize should **NOT** be run with valgrind as the tools do not behave well together. Only the channel executable should be used with valgrind. Valgrind will issue messages about memory errors and leaks that it detects for you to fix them. You should implement code that does not generate any valgrind errors or warnings.
 
-Other command line options can be found by running: `./mdriver -h`
-
-To debug your code with gdb, run: `gdb mdriver`.
-
-## Rubric for demo
-
-### LOGISTICS
-
-As part of your malloc grade, you must demo and explain your final design, code, and heap checker to a TA. You should be prepared to explain and demo everything in about 5-6 minutes to allow for 2-3 minutes of TA questions and discussion. The entire process should take no more than 9 minutes.
-
-You must sign up for a time slot in Canvas to meet with a TA. Instructions for how to sign up on Canvas can be found here: https://community.canvaslms.com/docs/DOC-10580-4212716665.
-
-You are only allowed to sign up for a single slot, and being late will cut into your allotted time. All grading will be conducted during TA office hours the week after the assignment due date, so please reserve your slot soon before they fill up. If for some reason you cannot make any of the remaining TA office hours, please send us a Canvas message with your availabilities. This needs to be done early enough before the deadline so that we can figure out how to accommodate. There is no guarantee that we can accommodate scheduling issues after the assignment deadline, which may result in a 0 for this part of the assignment. So please reserve your time slot soon and let us know of any issues before the deadline.
-
-Since the TAs will be grading the demos during office hours, any questions about the course or next assignment should be sent as Canvas messages to all the course staff or you can attend the instructor's office hours.
-
-The grading will *not* be determined immediately, since we'll try to calibrate the grading between TAs for consistency. So please do *not* ask the TAs for your grade; it will not be finalized during the demo. There's always going to be some subjectivity, and I've already met with the TAs to try to form a common baseline, and I've additionally provided a detailed rubric at the end of this announcement. Thus, we believe the grading should be fair, and the TAs will *not* be handling regrades as that takes far too much time that would take away from their time to help with office hours for the next assignment. If you feel adamant about the grading being unfair, the instructor will handle all such issues (send the instructor a Canvas message), though any regrades are final and could potentially lower your score.
-
-Next is the grading rubric, which gives more details on what is considered a quality solution and provisions for a bit of extra credit.
-
-### DESIGN: design_score = min(design_comments, design_explanation) * 4
-
-#### Design Comments
-
-You should place your design comments at the top of the file as specified in the starter code.
-
-- 3.5 (above expectations; bonus points) = Well-written and easy to understand
-
-    Clear sections about the different design aspects including reasons behind the design choices. May include ASCII diagrams for ease of understanding. This is what one might expect in clearly documented production quality code. This should be considered as a bonus if you impress the TAs.
-
-- 3 (meets expectations; full score) = Understandable, but not easy to read and/or slightly incomplete design description
-
-    Describes all the main design points in an understandable way, but some of the less important parts of the design may be missing. The comments may be difficult to read due to being too short or too long and verbose.
-
-- 2 (below expectations; partial credit) = Difficult to understand or lacking in key design points
-
-    Describes some aspects of the design, but is incomplete and lacks some key design aspects. The english may be difficult to comprehend, and there may be some minor errors with how your design matches your implementation.
-
-- 1 (major issues) = Minimal effort or incorrect
-
-    The design comments are not about the design or they significantly lack in describing the design. Examples would include only describing briefly what the design is without describing how the design works and the benefits/drawbacks of the design. This rating also applies to design comments that are significantly different from your actual code.
-
-- 0 (missing) = Missing file/design comments
-
-    Did not write design comments.
-
-#### Design Explanation
-
-You should explain your design to the TAs without reading from your comments. You may draw some pictures if it helps, but you should keep your explanation concise and focused on the main design points.
-
-- 3.5 (above expectations; bonus points) = Clear, succinct explanation of key design points and the benefits/drawbacks of your approach
-
-- 3 (meets expectations; full score) = Can explain what your design is and how it works and can reasonably answer the TA's questions
-
-- 2 (below expectations; partial credit) = Difficulty in explaining the key concepts in your design and/or some difficulty in answering the TA's questions
-
-- 1 (major issues) = Cannot explain your design and/or unable to answer the TA's questions
-
-- 0 (missing) = Did not show up for grading
-
-### CODE: code_score = min(code_comments, code_explanation) * 4
-
-#### Code Comments
-
-You should comment your code to describe assumptions and key concepts. It should be reasonably complete and not simply repeat what your code is doing. You should assume the reader can read C code, but may not understand how your code is trying to implement the functionality.
-
-- 3.5 (above expectations; bonus points) = Well-written and easy to understand
-
-    Includes function comments with appropriate descriptions of the input/output as well as any assumptions about the input/output and how the function should be called. Additionally, key parts of the code and complex, hard-to-understand parts of the code will be commented to provide additional clarity. This rating should not be verbose and should not comment every line of code, as that would make it hard to read. This is what one might expect in clearly documented production quality code. This should be considered as a bonus if you impress the TAs.
-
-- 3 (meets expectations; full score) = Understandable, but not easy to read and/or slightly incomplete
-
-    Comments are understandable and reasonably complete, but some parts may be lacking some comments, or there may be too many comments, which degrades readability. The comments should succinctly explain what the code is doing conceptually without just repeating what the code is doing. For example, to comment head = NULL, you should *not* say:
-
-    // Sets head to NULL
-
-    The code already clearly indicates that head is being set to NULL. Instead, you should say something like:
-
-    // Initializes global variables to reset the malloc data structure to its initial state
-
-    This explains both what the code is doing and why the code is needed.
-
-- 2 (below expectations; partial credit) = Difficult to understand or lacking in key design points
-
-    Includes basic comments about parts of the code, but is incomplete and lacks comments in some key areas. Examples of poor comments includes repeating what the code is doing. The english may be difficult to comprehend, and there may be some minor errors with how your comments match your implementation.
-
-- 1 (major issues) = Minimal effort or incorrect
-
-    Minimal comments or the comments significantly lack in describing the code. This rating also applies to comments that are significantly different from your actual code.
-
-- 0 (missing) = Missing code comments
-
-    Did not write code comments beyond the starter code comments.
-
-#### Code Explanation
-
-You should explain your code to the TAs without reading from your comments. You may draw some pictures if it helps, but you should keep your explanation concise and focused on the key parts of your code. You should describe how your design is implemented in your various functions, as well as describing some of the key functions in your code.
-
-- 3.5 (above expectations; bonus points) = Clear, succinct explanation of key parts of the code and some of the key challenges in making your code work correctly
-
-- 3 (meets expectations; full score) = Can explain how your code works and can reasonably answer the TA's questions
-
-- 2 (below expectations; partial credit) = Difficulty in explaining the key parts in your code and/or some difficulty in answering the TA's questions
-
-- 1 (major issues) = Cannot explain your code and/or unable to answer the TA's questions
-
-- 0 (missing) = Did not show up for grading
-
-### HEAP CHECKER: heap_checker_score = min(heap_checker_code, heap_checker_demo) * 8
-
-#### Heap Checker Code
-
-Your heap checker should check for many invariants in your code to help in your debugging. Invariants are things you can test for that are always true in a valid malloc data structure. Writing these tests will both help you in debugging your code as well as improve your skills in writing test code. This is an invaluable tool for detecting bugs early when they occur rather than many malloc/free calls in the future after a chain of memory corruptions.
-
-- 3.5 (above expectations; bonus points) = Reasonably complete in checking invariants and the heap checker code is easy to read
-
-    Includes checks that will test important invariants in your design. This will depend on your design, and you should be able to articulate why your checks can reasonably test the correctness of your data structure consistency. Additionally, your heap checker code should be easy to read and be at the quality level of production test code. This should be considered as a bonus if you impress the TAs.
-
-- 3 (meets expectations; full score) = Checks many invariants, but may be missing some useful checks
-
-    Includes many checks, but a few useful checks may be missing. This rating would reflect an effective usage of the heap checker for debugging.
-
-- 2 (below expectations; partial credit) = Only tests part of your design and lacks important checks
-
-    Includes basic checks for some aspects of your design, but lacks important checks in key aspects of your design. Only implementing the suggested checks in the handout would be consistent with this rating level. The handout only provides a very small list of examples, whereas there are dozens of additional checks that one should think about and implement.
-
-- 1 (major issues) = Minimal effort or incorrect
-
-    The heap checker hardly contains any checks and/or has major correctness issues. This would also apply to heap checker code that does not build.
-
-- 0 (missing) = Missing heap checker
-
-    Did not write a heap checker.
-
-#### Heap Checker Demo
-
-You should demo your heap checker usage by calling your heap checker in appropriate places in your code and showing how you can use gdb to step through the heap checker in a few instances of your code. You should explain what your heap checker is doing as you go through the code to demonstrate that your heap checker code is correct. Note that since your malloc code should be correct, you do not need to introduce bugs for your heap checker to find. You just need to demo that your heap check can successfully validate that your malloc data structure is in a good state in a few scenarios (i.e., after some malloc/free calls so that you don't have an empty heap).
-
-- 3.5 (above expectations; bonus points) = Clear, succinct explanation of your heap checker and how you used it to find some of the most challenging bugs
-
-- 3 (meets expectations; full score) = Can explain what your heap checker is checking for and the types of bugs that the checks are useful for detecting, and can reasonably answer the TA's questions
-
-- 2 (below expectations; partial credit) = Difficulty in explaining the heap checker and/or some difficulty in answering the TA's questions
-
-- 1 (major issues) = Cannot explain your heap checker and/or unable to answer the TA's questions
-
-- 0 (missing) = Did not show up for grading
-
-### TIMELINESS
-
-You should be ready to go with your demo all set up. You should have your linux environment and code setup with the right #defines uncommented so that you can use gdb to show your heap checker in action. The entire demo, including explaining your design, code, and heap checker, should take 5-6 minutes plus 2-3 minutes for TA questions/discussion. The entire process should take no more than 9 minutes. This part of your grade is primarily providing a few free points for not causing delays in the grading, which may also affect the TA's ability to grade the other parts.
-
-- 2 (meets expectations) = prepared and ready to go with your linux environment, code, and demo ready
-
-- 1 (below expectations) = delays in getting set up
-
-- 0 (missing or major issues) = did not show up or significant delays in setting up
+**IMPORTANT: Note that any test FAILURE may result in the sanitizer or valgrind reporting thread leaks or memory leaks.** This is expected since test failures will cause the test to prematurely end without cleaning up any threads or memory. Thus, you should first fix the test failure.
 
 ## Handin
+Similar to the last assignment, we will be using GitHub for managing submissions, and **you must show your partial work by periodically adding, committing, and pushing your code to GitHub.** This helps us see your code if you ask any questions on Canvas (please include your GitHub username) and also helps deter academic integrity violations.
 
-Similar to the last assignment, we will be using GitHub for managing submissions, and **you must show your partial work by periodically adding, committing, and pushing your code to GitHub**. This helps us see your code if you ask any questions on Canvas (please include your GitHub username) and also helps deter academic integrity violations.
-
-Additionally, please input the desired commit number that you would like us to grade in Canvas. You can get the commit number from github.com. In your repository, click on the commits link to the right above your files. Find the commit from the appropriate day/time that you want graded. Click on the clipboard icon to copy the commit number. Note that this is a much longer number than the displayed number. Paste your very long commit number and only your commit number in this assignment submission textbox.
+Additionally, please input the desired commit number that you would like us to grade in Canvas. You can get the commit number from github.com. In your repository, click on the commits link to the right above your files. Find the commit from the appropriate day/time that you want graded. Click on the clipboard icon to copy the commit number. Note that this is a much longer number than the displayed number. Paste your long commit number and only your commit number in this assignment submission textbox.
 
 ## Hints
+- Carefully read the output from the sanitizer and valgrind tools and think about what they're trying to say. Usually, they're printing call stacks to tell you which locations have race conditions, or which locations allocate some memory that was being accessed in the race condition, or which locations allocate some memory that is being leaked, etc. These tools are tremendously useful, which is why we've set them up for you for this assignment.
 
-- *Refer to the lectures for an overview of a recommended malloc design.* While you are not required to use the design, our suggestions give you a good starting point. We recommend to eventually implement the segregated free list design, and a tuned version of that should get the majority of the points. We also recommend trying the footer optimization as that can help space utilization.
+- While the tools are very useful, they are not perfect. Some race conditions are rare and don't show up all the time. A reasonable approach to debugging these race condition bugs is to try to identify the symptoms of the bug and then read your code to see if you can figure out the sequence of events that caused the bug based on the symptoms.
 
-- *Draw pictures.* Pictures are a great way of visualizing the memory layout, and you should make sure you draw complete and accurate pictures. Your pictures should be detailed enough to include example addresses, sizes, and content within the memory.
+- Debugging with gdb is a useful way of getting information about what's going on in your code. To compile your code in debug mode (to make it easier to debug with gdb), you can simply run:
 
-- *Go through the malloc practice quiz until you understand it.* The practice quiz is meant to help you draw pictures of the memory. You can repeat the practice quiz until you truly understand what should be happening.
+    `make debug`
 
-- *Encapsulate your pointer arithmetic and bit manipulation in static helper functions.* Pointer arithmetic in your implementation can be confusing and error-prone because of all the casting that is necessary. You can reduce the complexity significantly by writing static helper functions for your pointer operations and bit manipulation. The compiler should inline these simple functions for you.
+    It is important to realize that when trying to find race conditions, the reproducibility of the race condition often depends on the timing of events. As a result, sometimes, your race condition may only show up in non-debug (i.e., release) mode and may disappear when you run it in debug mode. Bugs may sometimes also disappear when running with gdb or if you add print statements. **Bugs that only show up some of the time are still bugs, and you should fix these. Do not try to change the timing to hide the bugs.**
 
-- *Use clear names for indicating what a pointer points to.* There is a difference between whether a pointer points to the beginning of a block or if it points to the beginning of the user payload space. Using good variable/parameter names will help avoid misinterpreting what a pointer points to.
+- If your bug only shows up outside of gdb, one useful approach is to look at the core dump (if it crashes). Here's a link to a tutorial on how to get and use core dump files:
 
-- *Write a good heap checker.* This will help detect errors much closer to when they occur. This is one of the most useful techniques for debugging data structures like the malloc memory structure.
+    http://yusufonlinux.blogspot.com/2010/11/debugging-core-using-gdb.html
 
-- *Avoid copying/pasting code between functions.* Anytime you duplicate your code, you duplicate your bugs, and you duplicate your maintenance work for updating the code. If you think you need to copy/paste code, then you should think about how to design your code with additional functions to avoid duplicating code.
+    You run “ulimit -c unlimited” to enable core dumps and find them in /var/lib/apport/coredump.
 
-- *Design your code in modules that can be used as building blocks.* Malloc is fundamentally just a complex data structure built up of multiple data structures. You should design your code to be modular by separating out sets of related functions that perform a specific task. For example, you could isolate all linked list code and have a set of functions that simply manage a linked list. You can then embed the linked list in the memory blocks and call these functions to help insert/remove without having all the insertion/removal logic mixed together with all the malloc logic. That way, any code that splits and coalesces blocks can just reuse your common linked list code without worrying about whether there's a linked list bug, and your linked list code would not need to worry about how it is used.
+- If your bug only shows up outside of gdb and causes a deadlock (i.e., hangs forever), one useful approach is to attach gdb to the program after the fact. To do this, first run your program. Then in another command prompt terminal, go into the VM and run:
 
-- *Use the `mdriver` `-f` option.* During initial development, using tiny trace files will simplify debugging and testing. We have included some trace files ending in `-short.rep` that you can use for initial debugging.
+    `ps aux`
 
-- *Use gdb; watchpoints can help with finding corruption.* `gdb` will help you isolate and identify out of bounds memory references as well as where in the code the SEGFAULT occurs. To assist the debugger, you may want to compile with `make debug` to produce unoptimized code that is easier to debug. To revert to optimized code, run `make release` for improved performance. Additionally, using watchpoints in gdb can help detect where corruption is occurring if you know the address that is being corrupted.
+    This will give you a listing of your running programs. Find your program and look at the PID column. Then within gdb (may require sudo) run:
 
-- *The textbooks have detailed malloc examples that can help your understanding.* You are allowed to reference any code *within the textbooks* as long as you cite the source and only reference code that is physically printed in the textbook. However, looking for or using any code online *even if it is textbook related* is strictly forbidden.
+    `attach PID`
 
-- *Use git to track your different versions.* `git` will allow you to track your code changes to help you remember what you've done in the past. It can also provide an easy way to revert to prior versions if you made a mistake.
+    where you replace PID with the PID number that you got from ps aux. This will give you a gdb debugging session just like if you had started the program with gdb.
 
-- *Use the `mdriver` `-v` and `-V` options.* These options allow extra debug information to be printed.
-
-- *Start early!* Unless you've been writing low-level systems code since you were 5, this will probably be some of the most difficult and sophisticated code you have written so far in your career. So start early, and good luck!
+- Read your code and draw timelines of multiple threads to visualize sequences that may cause race conditions. It takes practice to see race conditions, and this assignment provides that practice. Refer to the lectures for tips and examples for debugging concurrency bugs.
